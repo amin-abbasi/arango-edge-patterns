@@ -1,0 +1,422 @@
+-- Warehouse Node Hierarchy Schema and Queries
+-- This file defines the AQL for warehouse location management
+
+-- ============================================
+-- SCHEMA DEFINITIONS
+-- ============================================
+
+-- Create collections
+-- db.createCollection('w_storages', { ... })
+-- db.createCollection('w_nodes', { ... })
+-- db.createCollection('w_node_types', { ... })
+-- db.createCollection('w_containers', { ... })
+-- db.createEdgeCollection('w_node_links')
+
+-- Create indexes
+-- db.w_node_links.ensureIndex({ fields: ['_from'], type: 'persistent' })
+-- db.w_node_links.ensureIndex({ fields: ['_to'], type: 'persistent' })
+-- db.w_nodes.ensureIndex({ fields: ['type'], type: 'persistent' })
+
+-- ============================================
+-- BASIC QUERIES
+-- ============================================
+
+-- Query 1: Get all storage facilities
+FOR storage IN w_storages
+  RETURN {
+    _key: storage._key,
+    code: storage.code,
+    description: storage.description,
+    businessUnit: storage.business_unit
+  }
+
+-- Query 2: Get all nodes in a storage
+LET storageKey = "warehouse-a"
+FOR node, edge IN 1..100 OUTBOUND CONCAT('w_storages/', storageKey) w_node_links
+  FILTER node._deleted == null
+  RETURN {
+    _key: node._key,
+    code: node.code,
+    type: node.type,
+    zone: node.zone
+  }
+
+-- ============================================
+-- TRAVERSAL: FIND CHILDREN
+-- ============================================
+
+-- Query 3: Get direct children of a node
+LET nodeKey = "rack-a1"
+FOR child, edge IN 1..1 OUTBOUND CONCAT('w_nodes/', nodeKey) w_node_links
+  FILTER child._deleted == null
+  RETURN {
+    _key: child._key,
+    code: child.code,
+    description: child.description,
+    type: child.type,
+    hasContainer: child.hasContainer
+  }
+
+-- Query 4: Get full subtree of a node
+LET nodeKey = "zone-a"
+FOR node, edge, path IN 1..100 OUTBOUND CONCAT('w_nodes/', nodeKey) w_node_links
+  FILTER node._deleted == null
+  RETURN {
+    _key: node._key,
+    code: node.code,
+    depth: LENGTH(path.vertices) - 1,
+    type: node.type
+  }
+
+-- ============================================
+-- TRAVERSAL: FIND ANCESTORS
+-- ============================================
+
+-- Query 5: Get all parent nodes (ancestry chain)
+LET nodeKey = "container-shelf-1"
+FOR ancestor, edge, path IN 0..100 INBOUND CONCAT('w_nodes/', nodeKey) w_node_links
+  RETURN {
+    level: LENGTH(path.vertices),
+    _key: ancestor._key,
+    code: ancestor.code,
+    type: ancestor.type
+  }
+
+-- Query 6: Get parent storage facility
+LET nodeKey = "container-shelf-1"
+FOR ancestor, edge, path IN 0..100 INBOUND CONCAT('w_nodes/', nodeKey) w_node_links
+  FILTER CONTAINS(ancestor._id, 'w_storages/')
+  RETURN ancestor
+
+-- Query 7: Get immediate parent of a node
+LET nodeKey = "shelf-1"
+FOR parent, edge IN 1..1 INBOUND CONCAT('w_nodes/', nodeKey) w_node_links
+  RETURN {
+    _key: parent._key,
+    code: parent.code,
+    type: parent.type
+  }
+
+-- ============================================
+-- RELATED DATA QUERIES
+-- ============================================
+
+-- Query 8: Get node with its type information
+LET nodeKey = "rack-a1"
+LET node = DOCUMENT(CONCAT('w_nodes/', nodeKey))
+LET nodeType = (
+  FOR type IN w_node_types
+    FILTER type._key == node.type
+    RETURN type
+)[0]
+RETURN {
+  node: node,
+  type: nodeType
+}
+
+-- Query 9: Get node with all containers
+LET nodeKey = "shelf-1"
+LET node = DOCUMENT(CONCAT('w_nodes/', nodeKey))
+LET containers = (
+  FOR container IN w_containers
+    FILTER container.node == nodeKey
+    RETURN container
+)
+RETURN {
+  node: node,
+  containerCount: LENGTH(containers),
+  containers: containers,
+  totalQuantity: SUM(containers[*].quantity)
+}
+
+-- ============================================
+-- CAPACITY CALCULATIONS
+-- ============================================
+
+-- Query 10: Get capacity info for a single node
+LET nodeKey = "rack-a1"
+LET node = DOCUMENT(CONCAT('w_nodes/', nodeKey))
+LET nodeType = (
+  FOR type IN w_node_types
+    FILTER type._key == node.type
+    RETURN type
+)[0]
+LET usedCapacity = SUM(
+  FOR container IN w_containers
+    FILTER container.node == nodeKey
+    RETURN container.quantity
+)
+RETURN {
+  node: node,
+  nodeType: nodeType,
+  capacity: nodeType.capacity,
+  used: usedCapacity || 0,
+  available: (nodeType.capacity || 0) - (usedCapacity || 0),
+  utilizationPercent: ROUND((usedCapacity || 0) / (nodeType.capacity || 1) * 100)
+}
+
+-- Query 11: Get recursive capacity for entire subtree
+LET nodeKey = "zone-a"
+LET nodeId = CONCAT('w_nodes/', nodeKey)
+
+-- Get all nodes in subtree
+LET subtreeNodes = (
+  FOR node IN 1..100 OUTBOUND nodeId w_node_links
+    FILTER node._deleted == null
+    RETURN {_key: node._key, type: node.type}
+)
+
+-- For each node, get capacity and usage
+LET capacityData = (
+  FOR nodeInfo IN subtreeNodes
+    LET containers = (
+      FOR container IN w_containers
+        FILTER container.node == nodeInfo._key
+        RETURN container.quantity
+    )
+    LET nodeType = (
+      FOR type IN w_node_types
+        FILTER type._key == nodeInfo.type
+        RETURN type.capacity
+    )[0]
+    RETURN {
+      node: nodeInfo._key,
+      capacity: nodeType || 0,
+      used: SUM(containers) || 0
+    }
+)
+
+RETURN {
+  node: nodeKey,
+  totalCapacity: SUM(capacityData[*].capacity),
+  totalUsed: SUM(capacityData[*].used),
+  totalAvailable: SUM(capacityData[*].capacity) - SUM(capacityData[*].used),
+  nodeCount: LENGTH(subtreeNodes)
+}
+
+-- ============================================
+-- HIERARCHICAL TREE WITH DETAILS
+-- ============================================
+
+-- Query 12: Get subtree as nested JSON structure
+LET buildNodeTree = (nodeId, maxDepth, currentDepth) => (
+  currentDepth > maxDepth ? {_key: DOCUMENT(nodeId)._key} :
+  LET node = DOCUMENT(nodeId)
+  LET nodeType = (
+    FOR type IN w_node_types
+      FILTER type._key == node.type
+      RETURN type
+  )[0]
+  LET children = (
+    FOR child, edge IN 1..1 OUTBOUND nodeId w_node_links
+      FILTER child._deleted == null
+      RETURN CALL buildNodeTree(child._id, maxDepth, currentDepth + 1)
+  )
+  LET containers = (
+    FOR container IN w_containers
+      FILTER container.node == node._key
+      RETURN container.quantity
+  )
+  RETURN {
+    _key: node._key,
+    code: node.code,
+    type: node.type,
+    zone: node.zone,
+    capacity: nodeType.capacity || 0,
+    usedCapacity: SUM(containers) || 0,
+    containerCount: LENGTH(containers),
+    depth: currentDepth,
+    children: children
+  }
+)
+
+-- Get tree for a storage facility
+LET storageKey = "warehouse-a"
+LET storageId = CONCAT('w_storages/', storageKey)
+RETURN CALL buildNodeTree(storageId, 4, 0)
+
+-- ============================================
+-- SEARCH AND FILTER
+-- ============================================
+
+-- Query 13: Find node by code
+LET searchCode = "rack"
+FOR node IN w_nodes
+  FILTER node._deleted == null
+  FILTER CONTAINS(LOWER(node.code), LOWER(searchCode))
+  RETURN {
+    _key: node._key,
+    code: node.code,
+    type: node.type,
+    zone: node.zone
+  }
+
+-- Query 14: Find nodes by zone
+LET zoneFilter = "green"
+FOR node IN w_nodes
+  FILTER node._deleted == null
+  FILTER node.zone == zoneFilter
+  RETURN {
+    _key: node._key,
+    code: node.code,
+    type: node.type
+  }
+
+-- Query 15: Find nodes with specific type
+LET typeFilter = "rack"
+FOR node IN w_nodes
+  FILTER node._deleted == null
+  FILTER node.type == typeFilter
+  RETURN {
+    _key: node._key,
+    code: node.code,
+    zone: node.zone
+  }
+
+-- ============================================
+-- INVENTORY QUERIES
+-- ============================================
+
+-- Query 16: Find total quantity in subtree by part
+LET nodeKey = "zone-a"
+LET nodeId = CONCAT('w_nodes/', nodeKey)
+
+-- Get all nodes in subtree
+LET subtreeNodes = (
+  FOR node IN 1..100 OUTBOUND nodeId w_node_links
+    FILTER node._deleted == null
+    RETURN node._key
+)
+
+-- Get containers and aggregate by part
+LET inventory = (
+  FOR nodeKey IN subtreeNodes
+    FOR container IN w_containers
+      FILTER container.node == nodeKey
+      COLLECT partId = container.part_id
+      AGGREGATE totalQty = SUM(container.quantity),
+                containerCount = COUNT(1)
+      RETURN {
+        part: partId,
+        quantity: totalQty,
+        containerCount: containerCount
+      }
+)
+
+RETURN {
+  zone: nodeKey,
+  totalQuantity: SUM(inventory[*].quantity),
+  partsType: LENGTH(inventory),
+  inventory: inventory
+}
+
+-- Query 17: Find empty (unused) locations
+FOR node IN w_nodes
+  FILTER node._deleted == null
+  LET containerCount = COUNT(
+    FOR container IN w_containers
+      FILTER container.node == node._key
+      RETURN 1
+  )
+  FILTER containerCount == 0
+  LET ancestors = (
+    FOR ancestor IN 0..10 INBOUND node._id w_node_links
+      RETURN ancestor._key
+  )
+  RETURN {
+    _key: node._key,
+    code: node.code,
+    type: node.type,
+    path: ancestors
+  }
+
+-- ============================================
+-- MANIPULATION
+-- ============================================
+
+-- Query 18: Create new node and link to parent
+LET parentKey = "zone-a"
+LET newNode = {
+  code: "RACK-A5",
+  description: "Rack A5",
+  type: "rack",
+  zone: "green",
+  hasContainer: false
+}
+LET insertedNode = (INSERT newNode INTO w_nodes RETURN NEW)
+LET nodeId = FIRST(insertedNode)._id
+
+INSERT {
+  _from: CONCAT('w_nodes/', parentKey),
+  _to: nodeId
+} INTO w_node_links
+
+RETURN {
+  success: true,
+  node: FIRST(insertedNode),
+  message: "Node created and linked"
+}
+
+-- Query 19: Move node to different parent
+LET nodeKey = "shelf-a5"
+LET newParentKey = "rack-b3"
+LET nodeId = CONCAT('w_nodes/', nodeKey)
+LET newParentId = CONCAT('w_nodes/', newParentKey)
+
+-- Delete old edge
+FOR edge IN w_node_links
+  FILTER edge._to == nodeId
+  REMOVE edge IN w_node_links
+
+-- Create new edge
+INSERT {
+  _from: newParentId,
+  _to: nodeId
+} INTO w_node_links
+
+RETURN {
+  success: true,
+  message: CONCAT(nodeKey, " moved to ", newParentKey)
+}
+
+-- Query 20: Delete node and reassign children
+LET nodeKey = "rack-a5"
+LET nodeId = CONCAT('w_nodes/', nodeKey)
+LET parentEdge = FIRST(
+  FOR edge IN w_node_links
+    FILTER edge._to == nodeId
+    RETURN edge
+)
+
+-- Find all children
+LET children = (
+  FOR child, edge IN 1..1 OUTBOUND nodeId w_node_links
+    RETURN {id: child._id, key: child._key}
+)
+
+-- Reassign children to parent
+FOR child IN children
+  INSERT {
+    _from: parentEdge._from,
+    _to: child.id
+  } INTO w_node_links
+
+-- Delete edges to this node
+FOR edge IN w_node_links
+  FILTER edge._to == nodeId
+  REMOVE edge IN w_node_links
+
+-- Delete edges from this node
+FOR edge IN w_node_links
+  FILTER edge._from == nodeId
+  REMOVE edge IN w_node_links
+
+-- Delete the node
+REMOVE {_key: nodeKey} IN w_nodes
+
+RETURN {
+  success: true,
+  nodeDeleted: nodeKey,
+  childrenReassigned: LENGTH(children),
+  message: "Node deleted and children reassigned"
+}

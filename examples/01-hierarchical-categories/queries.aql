@@ -1,0 +1,356 @@
+-- Hierarchical Categories Schema and Queries
+-- This file defines the AQL for part category management
+
+-- ============================================
+-- SCHEMA DEFINITIONS
+-- ============================================
+
+-- Create collections
+-- db.createCollection('part_cats', {
+--   schema: {
+--     properties: {
+--       _key: { type: 'string' },
+--       name: { type: 'string' },
+--       code: { type: 'string' },
+--       containParts: { type: 'boolean' }
+--     },
+--     required: ['name', 'code']
+--   }
+-- })
+
+-- db.createEdgeCollection('part_cats_links')
+
+-- Create indexes for optimal traversal
+-- db.part_cats_links.ensureIndex({ fields: ['_from'], type: 'persistent' })
+-- db.part_cats_links.ensureIndex({ fields: ['_to'], type: 'persistent' })
+-- db.part_cats.ensureIndex({ fields: ['_deleted'], type: 'persistent' })
+
+-- ============================================
+-- BASIC QUERIES
+-- ============================================
+
+-- Query 1: Get single category
+RETURN DOCUMENT("part_cats/electronics")
+
+-- Query 2: Get all top-level categories (no parent)
+FOR cat IN part_cats
+  FILTER cat._deleted == null
+  FILTER !EXISTS(
+    FIRST(
+      FOR edge IN part_cats_links
+        FILTER edge._to == cat._id
+    )
+  )
+  RETURN cat
+
+-- ============================================
+-- TRAVERSAL QUERIES
+-- ============================================
+
+-- Query 3: Get direct children of a category
+LET parentKey = "electronics"
+FOR child, edge, path IN 1..1 OUTBOUND CONCAT('part_cats/', parentKey) part_cats_links
+  FILTER child._deleted == null
+  RETURN {
+    _key: child._key,
+    name: child.name,
+    code: child.code,
+    order: edge.order
+  }
+
+-- Query 4: Get all descendants (any depth)
+LET parentKey = "electronics"
+LET depth = 100  -- Set to actual depth limit
+FOR doc, edge, path IN 1..depth OUTBOUND CONCAT('part_cats/', parentKey) part_cats_links
+  FILTER doc._deleted == null
+  RETURN {
+    _key: doc._key,
+    name: doc.name,
+    depth: LENGTH(path.vertices) - 1,
+    path: path.vertices[*]._key
+  }
+
+-- Query 5: Get descendants at specific depth ONLY
+LET parentKey = "electronics"
+LET targetDepth = 2
+FOR doc, edge, path IN 1..targetDepth OUTBOUND CONCAT('part_cats/', parentKey) part_cats_links
+  FILTER doc._deleted == null
+  FILTER LENGTH(path.vertices) - 1 == targetDepth
+  RETURN {
+    _key: doc._key,
+    name: doc.name,
+    depth: LENGTH(path.vertices) - 1
+  }
+
+-- Query 6: Get full ancestry chain (all parents)
+LET childKey = "transistors"
+FOR ancestor, edge, path IN 0..100 INBOUND CONCAT('part_cats/', childKey) part_cats_links
+  RETURN {
+    level: LENGTH(path.vertices),
+    _key: ancestor._key,
+    name: ancestor.name,
+    code: ancestor.code
+  }
+
+-- Query 7: Get siblings (same parent)
+LET childKey = "transistors"
+LET parentEdges = (
+  FOR edge IN part_cats_links
+    FILTER edge._to == CONCAT('part_cats/', childKey)
+    RETURN edge._from
+)
+LET parentId = FIRST(parentEdges)
+FOR sibling, edge, path IN 1..1 OUTBOUND parentId part_cats_links
+  FILTER sibling._deleted == null
+  RETURN {
+    _key: sibling._key,
+    name: sibling.name,
+    code: sibling.code
+  }
+
+-- ============================================
+-- MULTI-LEVEL QUERIES WITH PROPERTIES
+-- ============================================
+
+-- Query 8: Get descendants with inherited properties
+LET parentKey = "electronics"
+FOR doc, edge, path IN 1..100 OUTBOUND CONCAT('part_cats/', parentKey) part_cats_links
+  FILTER doc._deleted == null
+  LET properties = (
+    -- Get properties defined at this level and ancestors
+    FOR ancestor IN path.vertices
+      FOR prop IN part_cats_props
+        FILTER prop.cat == ancestor._key
+        RETURN {
+          level: ancestor._key,
+          name: prop.name,
+          type: prop.type,
+          isOptional: prop.isOptional
+        }
+  )
+  RETURN {
+    _key: doc._key,
+    name: doc.name,
+    depth: LENGTH(path.vertices) - 1,
+    properties: properties
+  }
+
+-- Query 9: Find category by code (fuzzy search)
+LET searchCode = "semi"
+FOR cat IN part_cats
+  FILTER cat._deleted == null
+  FILTER CONTAINS(LOWER(cat.code), LOWER(searchCode)) 
+         || CONTAINS(LOWER(cat.name), LOWER(searchCode))
+  RETURN {
+    _key: cat._key,
+    name: cat.name,
+    code: cat.code
+  }
+
+-- ============================================
+-- MANIPULATION QUERIES
+-- ============================================
+
+-- Query 10: Create new category with parent link
+LET parentKey = "electronics"
+LET newCat = {
+  name: "Microcontrollers",
+  code: "MCU",
+  containParts: false
+}
+LET insertedCat = (INSERT newCat INTO part_cats RETURN NEW)
+LET catId = FIRST(insertedCat)._id
+
+INSERT {
+  _from: CONCAT('part_cats/', parentKey),
+  _to: catId,
+  order: 0
+} INTO part_cats_links
+
+RETURN {
+  success: true,
+  category: FIRST(insertedCat),
+  message: "Category created and linked"
+}
+
+-- Query 11: Move category to different parent
+LET categoryKey = "transistors"
+LET newParentKey = "semiconductors"
+
+-- Delete old edge
+FOR edge IN part_cats_links
+  FILTER edge._to == CONCAT('part_cats/', categoryKey)
+  REMOVE edge IN part_cats_links
+
+-- Create new edge
+INSERT {
+  _from: CONCAT('part_cats/', newParentKey),
+  _to: CONCAT('part_cats/', categoryKey),
+  order: 0
+} INTO part_cats_links
+
+RETURN {
+  success: true,
+  message: CONCAT(categoryKey, " moved to ", newParentKey)
+}
+
+-- Query 12: Soft delete category (mark as deleted)
+LET categoryKey = "transistors"
+UPDATE {_key: categoryKey} WITH {_deleted: DATE_NOW()} IN part_cats
+RETURN {
+  success: true,
+  message: CONCAT(categoryKey, " marked as deleted")
+}
+
+-- Query 13: Cascade delete - delete all edges for a category
+LET categoryKey = "transistors"
+LET categoryId = CONCAT('part_cats/', categoryKey)
+
+-- Delete edges where this is child (parents -> this)
+LET deletedParentEdges = (
+  FOR edge IN part_cats_links
+    FILTER edge._to == categoryId
+    REMOVE edge IN part_cats_links
+    RETURN edge
+)
+
+-- Delete edges where this is parent (this -> children)
+LET deletedChildEdges = (
+  FOR edge IN part_cats_links
+    FILTER edge._from == categoryId
+    REMOVE edge IN part_cats_links
+    RETURN edge
+)
+
+RETURN {
+  success: true,
+  deletedParentEdges: LENGTH(deletedParentEdges),
+  deletedChildEdges: LENGTH(deletedChildEdges),
+  message: "Category edges deleted"
+}
+
+-- Query 14: Cascade delete - delete category and all descendants
+LET categoryKey = "electronics"
+LET categoryId = CONCAT('part_cats/', categoryKey)
+
+-- Find all descendants
+LET descendants = (
+  FOR doc IN 1..100 OUTBOUND categoryId part_cats_links
+    RETURN doc._key
+)
+
+-- Delete all descendant edges pointing to descendants
+FOR descendantKey IN descendants
+  FOR edge IN part_cats_links
+    FILTER edge._to == CONCAT('part_cats/', descendantKey)
+    REMOVE edge IN part_cats_links
+
+-- Delete all descendant edges from descendants
+FOR descendantKey IN descendants
+  FOR edge IN part_cats_links
+    FILTER edge._from == CONCAT('part_cats/', descendantKey)
+    REMOVE edge IN part_cats_links
+
+-- Delete all descendants
+FOR descendantKey IN descendants
+  REMOVE {_key: descendantKey} IN part_cats
+
+-- Delete parent edges
+FOR edge IN part_cats_links
+  FILTER edge._to == categoryId
+  REMOVE edge IN part_cats_links
+
+-- Delete parent edges from this
+FOR edge IN part_cats_links
+  FILTER edge._from == categoryId
+  REMOVE edge IN part_cats_links
+
+-- Finally delete the category itself
+REMOVE {_key: categoryKey} IN part_cats
+
+RETURN {
+  success: true,
+  deletedCount: LENGTH(descendants) + 1,
+  message: CONCAT(categoryKey, " and all descendants deleted")
+}
+
+-- ============================================
+-- ANALYTICAL QUERIES
+-- ============================================
+
+-- Query 15: Category statistics
+FOR cat IN part_cats
+  FILTER cat._deleted == null
+  LET childCount = LENGTH(
+    FOR edge IN part_cats_links
+      FILTER edge._from == cat._id
+      RETURN 1
+  )
+  LET parentCount = LENGTH(
+    FOR edge IN part_cats_links
+      FILTER edge._to == cat._id
+      RETURN 1
+  )
+  LET depth = COUNT(
+    FOR ancestor IN 0..100 INBOUND cat._id part_cats_links
+      RETURN 1
+  )
+  RETURN {
+    category: cat._key,
+    name: cat.name,
+    childCount: childCount,
+    parentCount: parentCount,
+    depth: depth,
+    isLeaf: childCount == 0,
+    isRoot: parentCount == 0
+  }
+
+-- Query 16: Full category tree as nested structure
+LET buildTree = (
+  catKey,
+  level,
+  maxDepth
+) => (
+  level > maxDepth ? [] : 
+  {
+    _key: catKey,
+    name: FIRST(
+      FOR cat IN part_cats
+        FILTER cat._key == catKey
+        RETURN cat.name
+    ),
+    children: (
+      FOR child, edge IN 1..1 OUTBOUND CONCAT('part_cats/', catKey) part_cats_links
+        FILTER child._deleted == null
+        RETURN CALL buildTree(child._key, level + 1, maxDepth)
+    )
+  }
+)
+
+-- Get full tree from root
+FOR root IN part_cats
+  FILTER root._deleted == null
+  FILTER !EXISTS(
+    FIRST(
+      FOR edge IN part_cats_links
+        FILTER edge._to == root._id
+    )
+  )
+  RETURN CALL buildTree(root._key, 1, 5)
+
+-- Query 17: Find orphaned categories (categories with deleted parents)
+FOR cat IN part_cats
+  FILTER cat._deleted == null
+  LET parentEdges = (
+    FOR edge IN part_cats_links
+      FILTER edge._to == cat._id
+      RETURN edge
+  )
+  FOR edge IN parentEdges
+    LET parent = DOCUMENT(edge._from)
+    FILTER parent._deleted != null
+    RETURN {
+      category: cat._key,
+      name: cat.name,
+      orphanedFromParent: DOCUMENT(edge._from)._key
+    }

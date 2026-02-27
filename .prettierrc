@@ -1,0 +1,20 @@
+{
+    "semi": true,
+    "trailingComma": "all",
+    "singleQuote": true,
+    "printWidth": 180,
+    "tabWidth": 4,
+    "bracketSpacing": true,
+    "bracketSameLine": true,
+    "endOfLine": "auto",
+    "importOrder": ["^@nestjs/(.*)$", "<THIRD_PARTY_MODULES>", "", "^@/(.*)$", "", "^[./]"],
+    "importOrderParserPlugins": ["typescript", "decorators-legacy"],
+    "importOrderTypeScriptVersion": "5.9.3",
+    "importOrderCaseSensitive": false,
+    "importOrderSeparation": true,
+    "importOrderSortSpecifiers": true,
+    "importOrderMergeDuplicateImports": true,
+    "importOrderCombineTypeAndValueImports": true,
+    "importOrderGroupNamespaceSpecifiers": true,
+    "importOrderSeparateGroups": true
+}

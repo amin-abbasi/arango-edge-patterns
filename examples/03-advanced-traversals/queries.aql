@@ -1,0 +1,27 @@
+-- Advanced traversal and aggregation queries
+
+-- Query: Total quantity of parts in a zone filtered by category
+LET zoneKey = "zone-a"
+LET categoryFilter = "semiconductors"
+
+LET allNodes = (
+  FOR node IN 1..100 OUTBOUND CONCAT('w_nodes/', zoneKey) w_node_links
+    FILTER node._deleted == null
+    RETURN node._key
+)
+
+LET inventory = (
+  FOR nodeKey IN allNodes
+    FOR container IN w_containers
+      FILTER container.node == nodeKey
+      LET part = DOCUMENT(CONCAT('parts/', container.part_id))
+      LET partCategory = FIRST(
+        FOR cat, edge IN 0..100 INBOUND CONCAT('parts/', container.part_id) part_cats_links
+          RETURN cat
+      )
+      FILTER partCategory == categoryFilter
+      COLLECT partId = container.part_id AGGREGATE totalQty = SUM(container.quantity)
+      RETURN { part: partId, qty: totalQty }
+)
+
+RETURN { zone: zoneKey, totalQuantity: SUM(inventory[*].qty), parts: inventory }
