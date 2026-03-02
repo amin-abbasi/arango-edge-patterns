@@ -1,11 +1,11 @@
-import express, { Express, Request, Response, NextFunction } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { initializeDatabase, seedDatabase } from './db.js';
 import { categoryQueries } from './queries/categories.js';
 import { warehouseQueries } from './queries/warehouse.js';
 import { logger } from './utils/logger.js';
 
-const app: Express = express();
+const app = express();
 const PORT = process.env.PORT || 6000;
 
 // Middleware
@@ -14,187 +14,93 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Request logging
-app.use((req, res, next) => {
+app.use((req, _res, next) => {
     logger.info(`${req.method} ${req.path}`);
     next();
 });
 
-// Error handler
-app.use((err: any, req: Request, res: Response, next: NextFunction) => {
-    logger.error(err);
-    res.status(500).json({
-        success: false,
-        error: err.message || 'Internal server error',
+// ============================================
+// RESPONSE HELPERS
+// ============================================
+
+function sendSuccess(res: Response, data: unknown, extras?: Record<string, unknown>) {
+    res.json({
+        success: true,
+        data,
+        timestamp: new Date().toISOString(),
+        ...extras,
+    });
+}
+
+function sendCreated(res: Response, data: unknown, message: string) {
+    res.status(201).json({
+        success: true,
+        data,
+        message,
         timestamp: new Date().toISOString(),
     });
-});
+}
+
+function sendNotFound(res: Response, message: string) {
+    res.status(404).json({
+        success: false,
+        error: message,
+        timestamp: new Date().toISOString(),
+    });
+}
+
+function sendError(res: Response, error: unknown) {
+    const message = error instanceof Error ? error.message : 'Internal server error';
+    res.status(500).json({
+        success: false,
+        error: message,
+        timestamp: new Date().toISOString(),
+    });
+}
 
 // ============================================
 // HEALTH & INFO
 // ============================================
 
-app.get('/api/health', async (req: Request, res: Response) => {
-    try {
-        res.json({
-            success: true,
-            status: 'healthy',
-            timestamp: new Date().toISOString(),
-        });
-    } catch (error: any) {
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            timestamp: new Date().toISOString(),
-        });
-    }
+app.get('/api/health', (_req: Request, res: Response) => {
+    res.json({
+        success: true,
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+    });
 });
 
 // ============================================
-// CATEGORY ENDPOINTS
+// ITEM CATEGORY ENDPOINTS
 // ============================================
 
-// GET /api/categories - List all categories
-app.get('/api/categories', async (req: Request, res: Response) => {
+app.get('/api/categories', async (_req: Request, res: Response) => {
     try {
         const categories = await categoryQueries.listCategories();
-        res.json({
-            success: true,
-            data: categories,
-            count: categories.length,
-            timestamp: new Date().toISOString(),
-        });
-    } catch (error: any) {
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            timestamp: new String(),
-        });
+        sendSuccess(res, categories, { count: categories.length });
+    } catch (error) {
+        sendError(res, error);
     }
 });
 
-// GET /api/categories/roots - Get root categories
-app.get('/api/categories/roots', async (req: Request, res: Response) => {
+app.get('/api/categories/roots', async (_req: Request, res: Response) => {
     try {
         const roots = await categoryQueries.getRootCategories();
-        res.json({
-            success: true,
-            data: roots,
-            count: roots.length,
-            timestamp: new Date().toISOString(),
-        });
-    } catch (error: any) {
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            timestamp: new Date().toISOString(),
-        });
+        sendSuccess(res, roots, { count: roots.length });
+    } catch (error) {
+        sendError(res, error);
     }
 });
 
-// GET /api/categories/:id - Get specific category
-app.get('/api/categories/:id', async (req: Request, res: Response) => {
-    try {
-        const category = await categoryQueries.getCategory(req.params.id);
-        if (!category) {
-            return res.status(404).json({
-                success: false,
-                error: 'Category not found',
-                timestamp: new Date().toISOString(),
-            });
-        }
-        res.json({
-            success: true,
-            data: category,
-            timestamp: new Date().toISOString(),
-        });
-    } catch (error: any) {
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            timestamp: new Date().toISOString(),
-        });
-    }
-});
-
-// GET /api/categories/:id/children - Get direct children
-app.get('/api/categories/:id/children', async (req: Request, res: Response) => {
-    try {
-        const children = await categoryQueries.getDirectChildren(req.params.id);
-        res.json({
-            success: true,
-            data: children,
-            count: children.length,
-            timestamp: new Date().toISOString(),
-        });
-    } catch (error: any) {
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            timestamp: new Date().toISOString(),
-        });
-    }
-});
-
-// GET /api/categories/:id/descendants - Get all descendants
-app.get('/api/categories/:id/descendants', async (req: Request, res: Response) => {
-    try {
-        const maxDepth = req.query.depth ? parseInt(req.query.depth as string) : 100;
-        const descendants = await categoryQueries.getDescendants(req.params.id, maxDepth);
-        res.json({
-            success: true,
-            data: descendants,
-            count: descendants.length,
-            depth: maxDepth,
-            timestamp: new Date().toISOString(),
-        });
-    } catch (error: any) {
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            timestamp: new Date().toISOString(),
-        });
-    }
-});
-
-// GET /api/categories/:id/ancestors - Get all ancestors
-app.get('/api/categories/:id/ancestors', async (req: Request, res: Response) => {
-    try {
-        const ancestors = await categoryQueries.getAncestors(req.params.id);
-        res.json({
-            success: true,
-            data: ancestors,
-            count: ancestors.length,
-            timestamp: new Date().toISOString(),
-        });
-    } catch (error: any) {
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            timestamp: new Date().toISOString(),
-        });
-    }
-});
-
-// GET /api/categories/:id/stats - GetCategory stats
-app.get('/api/categories/stats', async (req: Request, res: Response) => {
+app.get('/api/categories/stats', async (_req: Request, res: Response) => {
     try {
         const stats = await categoryQueries.getCategoryStats();
-        res.json({
-            success: true,
-            data: stats,
-            count: stats.length,
-            timestamp: new Date().toISOString(),
-        });
-    } catch (error: any) {
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            timestamp: new Date().toISOString(),
-        });
+        sendSuccess(res, stats, { count: stats.length });
+    } catch (error) {
+        sendError(res, error);
     }
 });
 
-// POST /api/categories - Create category
 app.post('/api/categories', async (req: Request, res: Response) => {
     try {
         const { key, name, code, parentId, containParts } = req.body;
@@ -206,37 +112,60 @@ app.post('/api/categories', async (req: Request, res: Response) => {
             });
         }
         const category = await categoryQueries.createCategory(key, name, code, parentId, containParts || false);
-        res.status(201).json({
-            success: true,
-            data: category,
-            message: 'Category created',
-            timestamp: new Date().toISOString(),
-        });
-    } catch (error: any) {
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            timestamp: new Date().toISOString(),
-        });
+        sendCreated(res, category, 'Category created');
+    } catch (error) {
+        sendError(res, error);
     }
 });
 
-// DELETE /api/categories/:id - Delete category
+// Parameterized routes come after static routes
+
+app.get('/api/categories/:id', async (req: Request, res: Response) => {
+    try {
+        const category = await categoryQueries.getCategory(req.params.id);
+        if (!category) {
+            return sendNotFound(res, 'Category not found');
+        }
+        sendSuccess(res, category);
+    } catch (error) {
+        sendError(res, error);
+    }
+});
+
+app.get('/api/categories/:id/children', async (req: Request, res: Response) => {
+    try {
+        const children = await categoryQueries.getDirectChildren(req.params.id);
+        sendSuccess(res, children, { count: children.length });
+    } catch (error) {
+        sendError(res, error);
+    }
+});
+
+app.get('/api/categories/:id/descendants', async (req: Request, res: Response) => {
+    try {
+        const maxDepth = req.query.depth ? parseInt(req.query.depth as string) : 100;
+        const descendants = await categoryQueries.getDescendants(req.params.id, maxDepth);
+        sendSuccess(res, descendants, { count: descendants.length, depth: maxDepth });
+    } catch (error) {
+        sendError(res, error);
+    }
+});
+
+app.get('/api/categories/:id/ancestors', async (req: Request, res: Response) => {
+    try {
+        const ancestors = await categoryQueries.getAncestors(req.params.id);
+        sendSuccess(res, ancestors, { count: ancestors.length });
+    } catch (error) {
+        sendError(res, error);
+    }
+});
+
 app.delete('/api/categories/:id', async (req: Request, res: Response) => {
     try {
         const result = await categoryQueries.cascadeDelete(req.params.id);
-        res.json({
-            success: true,
-            data: result,
-            message: 'Category deleted with cascade',
-            timestamp: new Date().toISOString(),
-        });
-    } catch (error: any) {
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            timestamp: new Date().toISOString(),
-        });
+        sendSuccess(res, result, { message: 'Category deleted with cascade' });
+    } catch (error) {
+        sendError(res, error);
     }
 });
 
@@ -244,160 +173,99 @@ app.delete('/api/categories/:id', async (req: Request, res: Response) => {
 // WAREHOUSE ENDPOINTS
 // ============================================
 
-// GET /api/warehouse/storages - List all storages
-app.get('/api/warehouse/storages', async (req: Request, res: Response) => {
+// Static routes first
+
+app.get('/api/warehouse/storages', async (_req: Request, res: Response) => {
     try {
         const storages = await warehouseQueries.listStorages();
-        res.json({
-            success: true,
-            data: storages,
-            count: storages.length,
-            timestamp: new Date().toISOString(),
-        });
-    } catch (error: any) {
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            timestamp: new Date().toISOString(),
-        });
+        sendSuccess(res, storages, { count: storages.length });
+    } catch (error) {
+        sendError(res, error);
     }
 });
 
-// GET /api/warehouse/nodes/:id - Get node details
+app.get('/api/warehouse/nodes/empty', async (_req: Request, res: Response) => {
+    try {
+        const empty = await warehouseQueries.findEmptyLocations();
+        sendSuccess(res, empty, { count: empty.length });
+    } catch (error) {
+        sendError(res, error);
+    }
+});
+
+// Parameterized routes
+
 app.get('/api/warehouse/nodes/:id', async (req: Request, res: Response) => {
     try {
         const node = await warehouseQueries.getNode(req.params.id);
         if (!node) {
-            return res.status(404).json({
-                success: false,
-                error: 'Node not found',
-                timestamp: new Date().toISOString(),
-            });
+            return sendNotFound(res, 'Node not found');
         }
-        res.json({
-            success: true,
-            data: node,
-            timestamp: new Date().toISOString(),
-        });
-    } catch (error: any) {
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            timestamp: new Date().toISOString(),
-        });
+        sendSuccess(res, node);
+    } catch (error) {
+        sendError(res, error);
     }
 });
 
-// GET /api/warehouse/nodes/:id/children - Get direct children
 app.get('/api/warehouse/nodes/:id/children', async (req: Request, res: Response) => {
     try {
         const children = await warehouseQueries.getDirectChildren(req.params.id);
-        res.json({
-            success: true,
-            data: children,
-            count: children.length,
-            timestamp: new Date().toISOString(),
-        });
-    } catch (error: any) {
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            timestamp: new Date().toISOString(),
-        });
+        sendSuccess(res, children, { count: children.length });
+    } catch (error) {
+        sendError(res, error);
     }
 });
 
-// GET /api/warehouse/nodes/:id/capacity - Get capacity info
 app.get('/api/warehouse/nodes/:id/capacity', async (req: Request, res: Response) => {
     try {
         const capacity = await warehouseQueries.getNodeCapacity(req.params.id);
         if (!capacity) {
-            return res.status(404).json({
-                success: false,
-                error: 'Node not found',
-                timestamp: new Date().toISOString(),
-            });
+            return sendNotFound(res, 'Node not found');
         }
-        res.json({
-            success: true,
-            data: capacity,
-            timestamp: new Date().toISOString(),
-        });
-    } catch (error: any) {
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            timestamp: new Date().toISOString(),
-        });
+        sendSuccess(res, capacity);
+    } catch (error) {
+        sendError(res, error);
     }
 });
 
-// GET /api/warehouse/nodes/:id/containers - Get containers in node
 app.get('/api/warehouse/nodes/:id/containers', async (req: Request, res: Response) => {
     try {
         const containers = await warehouseQueries.getNodeWithContainers(req.params.id);
         if (!containers) {
-            return res.status(404).json({
-                success: false,
-                error: 'Node not found',
-                timestamp: new Date().toISOString(),
-            });
+            return sendNotFound(res, 'Node not found');
         }
-        res.json({
-            success: true,
-            data: containers,
-            timestamp: new Date().toISOString(),
-        });
-    } catch (error: any) {
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            timestamp: new Date().toISOString(),
-        });
+        sendSuccess(res, containers);
+    } catch (error) {
+        sendError(res, error);
     }
 });
 
-// GET /api/warehouse/nodes/:id/ancestors - Get ancestor path
 app.get('/api/warehouse/nodes/:id/ancestors', async (req: Request, res: Response) => {
     try {
         const ancestors = await warehouseQueries.getAncestors(req.params.id);
-        res.json({
-            success: true,
-            data: ancestors,
-            count: ancestors.length,
-            timestamp: new Date().toISOString(),
-        });
-    } catch (error: any) {
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            timestamp: new Date().toISOString(),
-        });
+        sendSuccess(res, ancestors, { count: ancestors.length });
+    } catch (error) {
+        sendError(res, error);
     }
 });
 
-// GET /api/warehouse/nodes/:id/empty - Find empty locations
-app.get('/api/warehouse/nodes/empty', async (req: Request, res: Response) => {
-    try {
-        const empty = await warehouseQueries.findEmptyLocations();
-        res.json({
-            success: true,
-            data: empty,
-            count: empty.length,
-            timestamp: new Date().toISOString(),
-        });
-    } catch (error: any) {
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            timestamp: new Date().toISOString(),
-        });
-    }
+// ============================================
+// ERROR HANDLER
+// ============================================
+app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+    logger.error(err);
+    res.status(500).json({
+        success: false,
+        error: err.message || 'Internal server error',
+        timestamp: new Date().toISOString(),
+    });
 });
 
+// ============================================
+// SERVER STARTUP
+// ============================================
 export async function startServer() {
     try {
-        // Initialize database and seed if neededWait
         await initializeDatabase();
 
         if (process.env.SEED_DB === 'true') {

@@ -10,9 +10,10 @@ export class WarehouseQueries {
      */
     async listStorages(): Promise<Storage[]> {
         const result = await this.db.query(aql`
-      FOR storage IN w_storages
-        RETURN storage
-    `);
+            FOR storage IN w_storages
+                FILTER storage._deleted == null
+                RETURN storage
+        `);
         return result.all();
     }
 
@@ -21,8 +22,8 @@ export class WarehouseQueries {
      */
     async getStorage(storageKey: string): Promise<Storage | null> {
         const result = await this.db.query(aql`
-      RETURN DOCUMENT(${`w_storages/${storageKey}`})
-    `);
+            RETURN DOCUMENT(${`w_storages/${storageKey}`})
+        `);
         const docs = await result.all();
         return docs[0] || null;
     }
@@ -32,11 +33,10 @@ export class WarehouseQueries {
      */
     async getStorageNodes(storageKey: string): Promise<WarehouseNode[]> {
         const result = await this.db.query(aql`
-      LET storageKey = ${storageKey}
-      FOR node, edge IN 1..1 OUTBOUND ${'w_storages/' + storageKey} w_node_links
-        FILTER node._deleted == null
-        RETURN node
-    `);
+            FOR node, edge IN 1..1 OUTBOUND ${'w_storages/' + storageKey} w_node_links
+                FILTER node._deleted == null
+                RETURN node
+        `);
         return result.all();
     }
 
@@ -45,8 +45,8 @@ export class WarehouseQueries {
      */
     async getNode(nodeKey: string): Promise<WarehouseNode | null> {
         const result = await this.db.query(aql`
-      RETURN DOCUMENT(${`w_nodes/${nodeKey}`})
-    `);
+            RETURN DOCUMENT(${`w_nodes/${nodeKey}`})
+        `);
         const docs = await result.all();
         return docs[0] || null;
     }
@@ -56,10 +56,10 @@ export class WarehouseQueries {
      */
     async getDirectChildren(nodeKey: string): Promise<WarehouseNode[]> {
         const result = await this.db.query(aql`
-      FOR child, edge IN 1..1 OUTBOUND ${'w_nodes/' + nodeKey} w_node_links
-        FILTER child._deleted == null
-        RETURN child
-    `);
+            FOR child, edge IN 1..1 OUTBOUND ${'w_nodes/' + nodeKey} w_node_links
+                FILTER child._deleted == null
+                RETURN child
+        `);
         return result.all();
     }
 
@@ -68,10 +68,10 @@ export class WarehouseQueries {
      */
     async getSubtree(nodeKey: string, maxDepth = 100): Promise<WarehouseNode[]> {
         const result = await this.db.query(aql`
-      FOR node IN 1..${maxDepth} OUTBOUND ${'w_nodes/' + nodeKey} w_node_links
-        FILTER node._deleted == null
-        RETURN node
-    `);
+            FOR node IN 1..${maxDepth} OUTBOUND ${'w_nodes/' + nodeKey} w_node_links
+                FILTER node._deleted == null
+                RETURN node
+        `);
         return result.all();
     }
 
@@ -80,14 +80,14 @@ export class WarehouseQueries {
      */
     async getAncestors(nodeKey: string): Promise<AncestorPath[]> {
         const result = await this.db.query(aql`
-      FOR ancestor, edge, path IN 0..100 INBOUND ${'w_nodes/' + nodeKey} w_node_links
-        RETURN {
-          level: LENGTH(path.vertices),
-          _key: ancestor._key,
-          name: ancestor.code,
-          code: ancestor.code
-        }
-    `);
+            FOR ancestor, edge, path IN 0..100 INBOUND ${'w_nodes/' + nodeKey} w_node_links
+                RETURN {
+                    level: LENGTH(path.vertices),
+                    _key: ancestor._key,
+                    name: ancestor.code,
+                    code: ancestor.code
+                }
+        `);
         return result.all();
     }
 
@@ -96,9 +96,9 @@ export class WarehouseQueries {
      */
     async getParent(nodeKey: string): Promise<WarehouseNode | null> {
         const result = await this.db.query(aql`
-      FOR parent IN 1..1 INBOUND ${'w_nodes/' + nodeKey} w_node_links
-        RETURN parent
-    `);
+            FOR parent IN 1..1 INBOUND ${'w_nodes/' + nodeKey} w_node_links
+                RETURN parent
+        `);
         const docs = await result.all();
         return docs[0] || null;
     }
@@ -108,10 +108,10 @@ export class WarehouseQueries {
      */
     async getParentStorage(nodeKey: string): Promise<Storage | null> {
         const result = await this.db.query(aql`
-      FOR ancestor IN 0..100 INBOUND ${'w_nodes/' + nodeKey} w_node_links
-        FILTER CONTAINS(ancestor._id, 'w_storages/')
-        RETURN ancestor
-    `);
+            FOR ancestor IN 0..100 INBOUND ${'w_nodes/' + nodeKey} w_node_links
+                FILTER CONTAINS(ancestor._id, 'w_storages/')
+                RETURN ancestor
+        `);
         const docs = await result.all();
         return docs[0] || null;
     }
@@ -121,26 +121,26 @@ export class WarehouseQueries {
      */
     async getNodeCapacity(nodeKey: string): Promise<NodeCapacityInfo | null> {
         const result = await this.db.query(aql`
-      LET node = DOCUMENT(${'w_nodes/' + nodeKey})
-      LET nodeType = (
-        FOR type IN w_node_types
-          FILTER type._key == node.type
-          RETURN type
-      )[0]
-      LET usedCapacity = SUM(
-        FOR container IN w_containers
-          FILTER container.node == ${nodeKey}
-          RETURN container.quantity
-      )
-      RETURN {
-        node: node,
-        nodeType: nodeType,
-        capacity: nodeType.capacity,
-        used: usedCapacity || 0,
-        available: (nodeType.capacity || 0) - (usedCapacity || 0),
-        utilizationPercent: ROUND(((usedCapacity || 0) / (nodeType.capacity || 1)) * 100)
-      }
-    `);
+            LET node = DOCUMENT(${'w_nodes/' + nodeKey})
+            LET nodeType = (
+                FOR type IN w_node_types
+                FILTER type._key == node.type
+                RETURN type
+            )[0]
+            LET usedCapacity = SUM(
+                FOR container IN w_containers
+                FILTER container.node == ${nodeKey}
+                RETURN container.quantity
+            )
+            RETURN {
+                node: node,
+                nodeType: nodeType,
+                capacity: nodeType.capacity,
+                used: usedCapacity || 0,
+                available: (nodeType.capacity || 0) - (usedCapacity || 0),
+                utilizationPercent: ROUND(((usedCapacity || 0) / (nodeType.capacity || 1)) * 100)
+            }
+        `);
         const docs = await result.all();
         return docs[0] || null;
     }
@@ -150,19 +150,19 @@ export class WarehouseQueries {
      */
     async getNodeWithContainers(nodeKey: string): Promise<NodeWithContainers | null> {
         const result = await this.db.query(aql`
-      LET node = DOCUMENT(${'w_nodes/' + nodeKey})
-      LET containers = (
-        FOR container IN w_containers
-          FILTER container.node == ${nodeKey}
-          RETURN container
-      )
-      RETURN {
-        node: node,
-        containerCount: LENGTH(containers),
-        containers: containers,
-        totalQuantity: SUM(containers[*].quantity)
-      }
-    `);
+            LET node = DOCUMENT(${'w_nodes/' + nodeKey})
+            LET containers = (
+                FOR container IN w_containers
+                FILTER container.node == ${nodeKey}
+                RETURN container
+            )
+            RETURN {
+                node: node,
+                containerCount: LENGTH(containers),
+                containers: containers,
+                totalQuantity: SUM(containers[*].quantity)
+            }
+        `);
         const docs = await result.all();
         return docs[0] || null;
     }
@@ -172,42 +172,42 @@ export class WarehouseQueries {
      */
     async getSubtreeCapacity(nodeKey: string): Promise<SubtreeCapacity | null> {
         const result = await this.db.query(aql`
-      LET nodeKey = ${nodeKey}
-      LET nodeId = ${'w_nodes/' + nodeKey}
+            LET nodeKey = ${nodeKey}
+            LET nodeId = ${'w_nodes/' + nodeKey}
       
-      LET subtreeNodes = (
-        FOR node IN 1..100 OUTBOUND nodeId w_node_links
-          FILTER node._deleted == null
-          RETURN {_key: node._key, type: node.type}
-      )
+            LET subtreeNodes = (
+                FOR node IN 1..100 OUTBOUND nodeId w_node_links
+                FILTER node._deleted == null
+                RETURN {_key: node._key, type: node.type}
+            )
       
-      LET capacityData = (
-        FOR nodeInfo IN subtreeNodes
-          LET containers = (
-            FOR container IN w_containers
-              FILTER container.node == nodeInfo._key
-              RETURN container.quantity
-          )
-          LET nodeType = (
-            FOR type IN w_node_types
-              FILTER type._key == nodeInfo.type
-              RETURN type.capacity
-          )[0]
-          RETURN {
-            node: nodeInfo._key,
-            capacity: nodeType || 0,
-            used: SUM(containers) || 0
-          }
-      )
+            LET capacityData = (
+                FOR nodeInfo IN subtreeNodes
+                LET containers = (
+                    FOR container IN w_containers
+                    FILTER container.node == nodeInfo._key
+                    RETURN container.quantity
+                )
+                LET nodeType = (
+                    FOR type IN w_node_types
+                    FILTER type._key == nodeInfo.type
+                    RETURN type.capacity
+                )[0]
+                RETURN {
+                    node: nodeInfo._key,
+                    capacity: nodeType || 0,
+                    used: SUM(containers) || 0
+                }
+            )
       
-      RETURN {
-        node: nodeKey,
-        totalCapacity: SUM(capacityData[*].capacity),
-        totalUsed: SUM(capacityData[*].used),
-        totalAvailable: SUM(capacityData[*].capacity) - SUM(capacityData[*].used),
-        nodeCount: LENGTH(subtreeNodes)
-      }
-    `);
+            RETURN {
+                node: nodeKey,
+                totalCapacity: SUM(capacityData[*].capacity),
+                totalUsed: SUM(capacityData[*].used),
+                totalAvailable: SUM(capacityData[*].capacity) - SUM(capacityData[*].used),
+                nodeCount: LENGTH(subtreeNodes)
+            }
+        `);
         const docs = await result.all();
         return docs[0] || null;
     }
@@ -217,36 +217,36 @@ export class WarehouseQueries {
      */
     async getZoneInventory(zoneKey: string): Promise<ZoneInventory | null> {
         const result = await this.db.query(aql`
-      LET zoneKey = ${zoneKey}
-      LET zoneId = ${'w_nodes/' + zoneKey}
+            LET zoneKey = ${zoneKey}
+            LET zoneId = ${'w_nodes/' + zoneKey}
       
-      LET subtreeNodes = (
-        FOR node IN 1..100 OUTBOUND zoneId w_node_links
-          FILTER node._deleted == null
-          RETURN node._key
-      )
+            LET subtreeNodes = (
+                FOR node IN 1..100 OUTBOUND zoneId w_node_links
+                FILTER node._deleted == null
+                RETURN node._key
+            )
       
-      LET inventory = (
-        FOR nodeKey IN subtreeNodes
-          FOR container IN w_containers
-            FILTER container.node == nodeKey
-            COLLECT partId = container.part_id
-            AGGREGATE totalQty = SUM(container.quantity),
-                      containerCount = COUNT(1)
+            LET inventory = (
+                FOR nodeKey IN subtreeNodes
+                    FOR container IN w_containers
+                        FILTER container.node == nodeKey
+                        COLLECT partId = container.part_id
+                        AGGREGATE totalQty = SUM(container.quantity),
+                        containerCount = COUNT(1)
+                        RETURN {
+                            part: partId,
+                            quantity: totalQty,
+                            containerCount: containerCount
+                        }
+            )
+      
             RETURN {
-              part: partId,
-              quantity: totalQty,
-              containerCount: containerCount
+                zone: zoneKey,
+                totalQuantity: SUM(inventory[*].quantity),
+                partsType: LENGTH(inventory),
+                inventory: inventory
             }
-      )
-      
-      RETURN {
-        zone: zoneKey,
-        totalQuantity: SUM(inventory[*].quantity),
-        partsType: LENGTH(inventory),
-        inventory: inventory
-      }
-    `);
+        `);
         const docs = await result.all();
         return docs[0] || null;
     }
@@ -256,16 +256,16 @@ export class WarehouseQueries {
      */
     async findEmptyLocations(): Promise<WarehouseNode[]> {
         const result = await this.db.query(aql`
-      FOR node IN w_nodes
-        FILTER node._deleted == null
-        LET containerCount = COUNT(
-          FOR container IN w_containers
-            FILTER container.node == node._key
-            RETURN 1
-        )
-        FILTER containerCount == 0
-        RETURN node
-    `);
+            FOR node IN w_nodes
+                FILTER node._deleted == null
+                LET containerCount = COUNT(
+                    FOR container IN w_containers
+                        FILTER container.node == node._key
+                        RETURN 1
+                )
+                FILTER containerCount == 0
+                RETURN node
+        `);
         return result.all();
     }
 
@@ -275,11 +275,11 @@ export class WarehouseQueries {
     async searchNodes(searchTerm: string): Promise<WarehouseNode[]> {
         const lowerSearch = searchTerm.toLowerCase();
         const result = await this.db.query(aql`
-      FOR node IN w_nodes
-        FILTER node._deleted == null
-        FILTER CONTAINS(LOWER(node.code), ${lowerSearch})
-        RETURN node
-    `);
+            FOR node IN w_nodes
+                FILTER node._deleted == null
+                FILTER CONTAINS(LOWER(node.code), ${lowerSearch})
+                RETURN node
+        `);
         return result.all();
     }
 
@@ -288,11 +288,11 @@ export class WarehouseQueries {
      */
     async getNodesByZone(zone: string): Promise<WarehouseNode[]> {
         const result = await this.db.query(aql`
-      FOR node IN w_nodes
-        FILTER node._deleted == null
-        FILTER node.zone == ${zone}
-        RETURN node
-    `);
+            FOR node IN w_nodes
+                FILTER node._deleted == null
+                FILTER node.zone == ${zone}
+                RETURN node
+        `);
         return result.all();
     }
 
@@ -301,11 +301,11 @@ export class WarehouseQueries {
      */
     async getNodesByType(nodeType: string): Promise<WarehouseNode[]> {
         const result = await this.db.query(aql`
-      FOR node IN w_nodes
-        FILTER node._deleted == null
-        FILTER node.type == ${nodeType}
-        RETURN node
-    `);
+            FOR node IN w_nodes
+                FILTER node._deleted == null
+                FILTER node.type == ${nodeType}
+                RETURN node
+        `);
         return result.all();
     }
 
@@ -323,18 +323,18 @@ export class WarehouseQueries {
         };
 
         const nodeResult = await this.db.query(aql`
-      INSERT ${newNode} INTO w_nodes RETURN NEW
-    `);
+            INSERT ${newNode} INTO w_nodes RETURN NEW
+        `);
         const [insertedNode] = await nodeResult.all();
 
         // Link to parent
         const parentId = parentKey.includes('/') ? parentKey : `w_nodes/${parentKey}`;
         await this.db.query(aql`
-      INSERT {
-        _from: ${parentId},
-        _to: ${insertedNode._id}
-      } INTO w_node_links
-    `);
+            INSERT {
+                _from: ${parentId},
+                _to: ${insertedNode._id}
+            } INTO w_node_links
+        `);
 
         return insertedNode;
     }
@@ -348,18 +348,18 @@ export class WarehouseQueries {
 
         // Delete old edge
         await this.db.query(aql`
-      FOR edge IN w_node_links
-        FILTER edge._to == ${nodeId}
-        REMOVE edge IN w_node_links
-    `);
+            FOR edge IN w_node_links
+                FILTER edge._to == ${nodeId}
+                REMOVE edge IN w_node_links
+        `);
 
         // Create new edge
         await this.db.query(aql`
-      INSERT {
-        _from: ${newParentId},
-        _to: ${nodeId}
-      } INTO w_node_links
-    `);
+            INSERT {
+                _from: ${newParentId},
+                _to: ${nodeId}
+            } INTO w_node_links
+        `);
 
         return true;
     }
@@ -371,49 +371,33 @@ export class WarehouseQueries {
         const nodeId = `w_nodes/${nodeKey}`;
 
         if (reassignToParent) {
-            const parentEdge = await this.db.query(aql`
-        FOR edge IN w_node_links
-          FILTER edge._to == ${nodeId}
-          RETURN edge
-      `);
-            const [pEdge] = await parentEdge.all();
-
-            if (pEdge) {
-                // Reassign children
-                const children = await this.db.query(aql`
-          FOR child, edge IN 1..1 OUTBOUND ${nodeId} w_node_links
-            RETURN child._id
-        `);
-                const childIds = await children.all();
-
-                for (const childId of childIds) {
-                    await this.db.query(aql`
-            INSERT {
-              _from: ${pEdge._from},
-              _to: ${childId}
-            } INTO w_node_links
-          `);
-                }
-            }
+            // Reassign children to this node's parent in a single query
+            await this.db.query(aql`
+                LET parentEdge = FIRST(
+                    FOR edge IN w_node_links
+                        FILTER edge._to == ${nodeId}
+                        RETURN edge
+                )
+                FILTER parentEdge != null
+                FOR child IN 1..1 OUTBOUND ${nodeId} w_node_links
+                    INSERT {
+                        _from: parentEdge._from,
+                        _to: child._id
+                    } INTO w_node_links
+            `);
         }
 
-        // Delete edges
+        // Delete all edges connected to this node
         await this.db.query(aql`
-      FOR edge IN w_node_links
-        FILTER edge._to == ${nodeId}
-        REMOVE edge IN w_node_links
-    `);
+            FOR edge IN w_node_links
+                FILTER edge._to == ${nodeId} OR edge._from == ${nodeId}
+                REMOVE edge IN w_node_links
+        `);
 
+        // Delete the node
         await this.db.query(aql`
-      FOR edge IN w_node_links
-        FILTER edge._from == ${nodeId}
-        REMOVE edge IN w_node_links
-    `);
-
-        // Delete node
-        await this.db.query(aql`
-      REMOVE {_key: ${nodeKey}} IN w_nodes
-    `);
+            REMOVE {_key: ${nodeKey}} IN w_nodes
+        `);
 
         return true;
     }

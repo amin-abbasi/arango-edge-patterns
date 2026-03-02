@@ -1,36 +1,34 @@
 import { Database } from 'arangojs';
 import { CollectionType } from 'arangojs/collection.js';
+import { logger } from './utils/logger.js';
 
-const db = new Database({
+const DB_CONFIG = {
     url: process.env.ARANGO_URL || 'http://localhost:8529',
-    databaseName: process.env.ARANGO_DB || 'erp_showcase',
     auth: {
         username: process.env.ARANGO_USER || 'root',
         password: process.env.ARANGO_PASSWORD || 'local',
     },
+};
+
+const DB_NAME = process.env.ARANGO_DB || 'erp_showcase';
+
+const db = new Database({
+    ...DB_CONFIG,
+    databaseName: DB_NAME,
 });
 
 export const getDatabase = (): Database => db;
 
 export async function initializeDatabase() {
     try {
-        const exists = await db.exists();
-        if (!exists) {
-            console.log('Creating database...');
-            // Must create from _system database context
-            const systemDb = new Database({
-                url: process.env.ARANGO_URL || 'http://localhost:8529',
-                databaseName: '_system',
-                auth: {
-                    username: process.env.ARANGO_USER || 'root',
-                    password: process.env.ARANGO_PASSWORD || 'local',
-                },
-            });
-            await systemDb.createDatabase(process.env.ARANGO_DB || 'erp_showcase');
+        const dbExists = await db.exists();
+        if (!dbExists) {
+            logger.info('Creating database...');
+            const systemDb = new Database({ ...DB_CONFIG, databaseName: '_system' });
+            await systemDb.createDatabase(DB_NAME);
         }
 
-        // Create collections if they don't exist
-        const collections = [
+        const collections: Array<{ name: string; type: 'document' | 'edge' }> = [
             { name: 'part_cats', type: 'document' },
             { name: 'part_cats_links', type: 'edge' },
             { name: 'w_storages', type: 'document' },
@@ -42,20 +40,19 @@ export async function initializeDatabase() {
 
         for (const col of collections) {
             const collection = db.collection(col.name);
-            const exists = await collection.exists();
-            if (!exists) {
-                console.log(`Creating collection: ${col.name}`);
+            const collectionExists = await collection.exists();
+            if (!collectionExists) {
+                logger.info(`Creating collection: ${col.name}`);
                 if (col.type === 'edge') await collection.create({ type: CollectionType.EDGE_COLLECTION });
                 else await collection.create();
             }
         }
 
-        // Create indexes
         await ensureIndexes();
 
-        console.log('Database initialized successfully');
+        logger.info('Database initialized successfully');
     } catch (error) {
-        console.error('Failed to initialize database:', error);
+        logger.error('Failed to initialize database:', error);
         throw error;
     }
 }
@@ -99,9 +96,9 @@ async function ensureIndexes() {
             fields: ['_deleted'],
         });
 
-        console.log('Indexes created/verified');
+        logger.info('Indexes created/verified');
     } catch (error) {
-        console.error('Failed to create indexes:', error);
+        logger.error('Failed to create indexes:', error);
     }
 }
 
@@ -273,9 +270,9 @@ export async function seedDatabase() {
             _to: 'w_nodes/shelf-a1-1',
         });
 
-        console.log('Database seeded successfully');
+        logger.info('Database seeded successfully');
     } catch (error) {
-        console.error('Failed to seed database:', error);
+        logger.error('Failed to seed database:', error);
         throw error;
     }
 }
