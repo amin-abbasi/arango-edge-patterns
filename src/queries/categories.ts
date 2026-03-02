@@ -32,14 +32,12 @@ export class CategoryQueries {
         const result = await this.db.query(aql`
             FOR cat IN part_cats
                 FILTER cat._deleted == null
-                FILTER !EXISTS(
-                    FIRST(
-                        FOR edge IN part_cats_links
-                            FILTER edge._to == cat._id
-                            RETURN 1
-                    )
+                LET parentCount = LENGTH(
+                    FOR edge IN part_cats_links
+                        FILTER edge._to == cat._id
+                        RETURN 1
                 )
-            )
+                FILTER parentCount == 0
             RETURN cat
         `);
         return result.all();
